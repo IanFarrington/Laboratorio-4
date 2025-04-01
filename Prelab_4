@@ -1,0 +1,42 @@
+#define F_CPU 16000000UL  // Frecuencia del Arduino Nano (16 MHz)
+#include <avr/io.h>
+#include <util/delay.h>
+
+#define BUTTON_INC PC0    // Botón incremento en A0 (PC0)
+#define BUTTON_DEC PC1    // Botón decremento en A1 (PC1)
+
+// Función antirrebote: retorna 1 si el botón está presionado
+uint8_t is_button_pressed(uint8_t pin) {
+	if (!(PINC & (1 << pin))) {      // Detecta pulsación
+		_delay_ms(20);               // Espera 20 ms
+		if (!(PINC & (1 << pin))) {  // Confirma pulsación
+			return 1;
+		}
+	}
+	return 0;
+}
+
+int main(void) {
+	UCSR0B &= ~(1 << RXEN0) & ~(1 << TXEN0); // Desactiva UART (libera D0/D1)
+	DDRD = 0xFF;          // PORTD como salida (LEDs D0-D7)
+	DDRC &= ~((1 << BUTTON_INC) | (1 << BUTTON_DEC)); // PC0 y PC1 como entrada
+	PORTC |= (1 << BUTTON_INC) | (1 << BUTTON_DEC);   // Pull-up internas
+
+	uint8_t counter = 0;  // Contador inicializado en 0
+
+	while (1) {
+		// Botón de incremento
+		if (is_button_pressed(BUTTON_INC)) {
+			counter++;           // Aumenta contador
+			PORTD = counter;     // Actualiza LEDs
+			while (is_button_pressed(BUTTON_INC)) {} // Espera a soltar botón
+		}
+		// Botón de decremento
+		if (is_button_pressed(BUTTON_DEC)) {
+			counter--;           // Reduce contador
+			PORTD = counter;     // Actualiza LEDs
+			while (is_button_pressed(BUTTON_DEC)) {} // Espera a soltar botón
+		}
+	}
+	return 0;
+}
