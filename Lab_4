@@ -1,0 +1,103 @@
+#define F_CPU 16000000UL
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <util/delay.h>
+
+// Definiciones
+#define BUTTON_INC PC0     // Botón incremento (A0)
+#define BUTTON_DEC PC1     // Botón decremento (A1)
+#define LED_TRANSISTOR PC2 // Transistor LEDs (A2)
+#define DISP1_TRANS PC3    // Transistor Display 1 (A3)
+#define DISP2_TRANS PC4    // Transistor Display 2 (A4)
+#define ALARM_LED PB4      // LED de alarma (D12/PB4)
+
+volatile uint8_t counter = 0;       // Contador principal
+volatile uint8_t adc_value = 0;     // Valor ADC (8 bits)
+uint8_t display_buffer[2] = {0};    // Búfer para displays
+
+// Tabla de conversión HEX a 7 segmentos (Cátodo común)
+const uint8_t seg_table[] = {
+	0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, // 0-7
+	0x7F, 0x6F, 0x77, 0x7C, 0x39, 0x5E, 0x79, 0x71  // 8-F
+};
+
+// Interrupción ADC
+ISR(ADC_vect) {
+	adc_value = ADCH;               // Lee ADC (8 bits)
+	ADCSRA |= (1 << ADSC);          // Reinicia conversión
+}
+
+// Interrupción Timer1 (Refresco displays/LEDs)
+ISR(TIMER1_COMPA_vect) {
+	static uint8_t digit = 0;
+	PORTD = 0x00;
+	PORTC &= ~((1 << DISP1_TRANS) | (1 << DISP2_TRANS) | (1 << LED_TRANSISTOR));
+
+	switch (digit) {
+		case 0: // Display 1
+		PORTD = seg_table[display_buffer[0]];
+		PORTC |= (1 << DISP1_TRANS);
+		digit = 1;
+		break;
+		case 1: // Display 2
+		PORTD = seg_table[display_buffer[1]];
+		PORTC |= (1 << DISP2_TRANS);
+		digit = 2;
+		break;
+		case 2: // LEDs del contador
+		PORTD = counter;
+		PORTC |= (1 << LED_TRANSISTOR);
+		digit = 0;
+		break;
+	}
+}
+
+// Función antirrebote no bloqueante
+uint8_t debounce(uint8_t pin) {
+	static uint16_t state[2] = {0};
+	state[pin] = (state[pin] << 1) | (!(PINC & (1 << pin))) | 0xE000;
+	return (state[pin] == 0xF000);
+}
+
+void setup_adc() {
+	ADMUX = (1 << REFS0) | (1 << ADLAR) | (1 << MUX2) | (1 << MUX1); // ADC6, 8 bits
+	ADCSRA = (1 << ADEN) | (1 << ADIE) | (1 << ADPS2) | (1 << ADPS1); // Prescaler 64
+	ADCSRA |= (1 << ADSC); // Inicia conversión
+}
+
+void setup_timer() {
+	TCCR1B = (1 << WGM12) | (1 << CS12); // Modo CTC, prescaler 256
+	OCR1A = 156; // Refresco ? 400 Hz
+	TIMSK1 = (1 << OCIE1A);
+}
+
+int main(void) {
+	// Configuración de puertos
+	UCSR0B &= ~(1 << RXEN0) & ~(1 << TXEN0); // Desactiva UART
+	DDRD = 0xFF;    // PORTD como salida (segmentos/LEDs)
+	DDRC |= (1 << LED_TRANSISTOR) | (1 << DISP1_TRANS) | (1 << DISP2_TRANS); // Transistores
+	DDRB |= (1 << ALARM_LED); // Configura D12 como salida (LED de alarma)
+	PORTC |= (1 << BUTTON_INC) | (1 << BUTTON_DEC); // Pull-ups para botones
+
+	setup_adc();
+	setup_timer();
+	sei(); // Habilita interrupciones
+
+	while (1) {
+		// Actualiza búfer de displays (ADC en HEX)
+		display_buffer[0] = adc_value >> 4;    // Dígito alto
+		display_buffer[1] = adc_value & 0x0F; // Dígito bajo
+
+		// Manejo de botones
+		if (debounce(BUTTON_INC)) counter++;
+		if (debounce(BUTTON_DEC)) counter--;
+
+		// Comparación ADC vs Contador
+		if (adc_value > counter) {
+			PORTB |= (1 << ALARM_LED); // Enciende LED de alarma (D12)
+			} else {
+			PORTB &= ~(1 << ALARM_LED); // Apaga LED de alarma
+		}
+	}
+	return 0;
+}
